@@ -2684,6 +2684,12 @@ public class ApiGatewayService {
 
     public RestApi putRestApi(String region, String apiId, String mode, String specBody, boolean failOnWarnings) {
         getRestApi(region, apiId);
+        if (mode != null && !"merge".equals(mode) && !"overwrite".equals(mode)) {
+            // AWS PutRestApi accepts only merge (the default) and overwrite; reject anything
+            // else before parsing or mutating so a typo cannot take the destructive overwrite path.
+            throw new AwsException("BadRequestException",
+                    "Invalid mode specified. Valid modes are 'merge' and 'overwrite'.", 400);
+        }
         ParsedOpenApi parsed = parseOpenApiSpec(specBody, failOnWarnings);
         RestApiSnapshot snapshot = snapshotRestApi(region, apiId);
         try {

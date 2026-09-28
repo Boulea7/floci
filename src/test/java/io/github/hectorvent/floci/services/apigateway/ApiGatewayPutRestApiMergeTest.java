@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -215,6 +217,19 @@ class ApiGatewayPutRestApiMergeTest {
             assertEquals(200, status(methodPath(apiId, "/shared", "POST")));
             assertEquals("530", getJson("/restapis/" + apiId + "/gatewayresponses/DEFAULT_5XX")
                     .path("statusCode").asText());
+        } finally {
+            given().delete("/restapis/" + apiId);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"merg", "Merge", "MERGE", " merge"})
+    void invalidModeIsRejectedBeforeAnyMutation(String mode) throws Exception {
+        String apiId = importApi(ORIGINAL_SPEC);
+        try {
+            given().contentType(ContentType.JSON).queryParam("mode", mode).body(MERGE_SPEC)
+                    .when().put("/restapis/" + apiId).then().statusCode(400);
+            assertOriginalApi(apiId);
         } finally {
             given().delete("/restapis/" + apiId);
         }
