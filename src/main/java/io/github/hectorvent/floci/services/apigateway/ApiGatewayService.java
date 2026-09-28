@@ -3115,6 +3115,10 @@ public class ApiGatewayService {
                         req.put("type", "COGNITO_USER_POOLS");
                         // Cognito user-pool authorizers carry the pool ARNs in the authorizer extension.
                         List<String> providerArns = importedProviderArns(authDef, schemeName);
+                        if (providerArns == null && existing != null
+                                && "COGNITO_USER_POOLS".equals(existing.getType())) {
+                            providerArns = existing.getProviderARNs();
+                        }
                         if (providerArns != null) {
                             req.put("providerARNs", providerArns);
                         }

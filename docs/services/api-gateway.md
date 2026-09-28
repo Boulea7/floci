@@ -67,6 +67,8 @@ incoming security schemes omit it. A same-name Lambda authorizer keeps its exist
 the incoming definition provides no new URI. If a same-name authorizer changes between Lambda
 and Cognito, retained methods that reference it use the new authorization type. An explicit
 operation-level `security: []` leaves that method without authorization.
+For a same-name Cognito authorizer, merge also keeps its existing pool ARNs when the incoming
+definition provides no new `providerARNs`; an explicit list replaces them, including `[]`.
 
 ### Supported Operations
 
