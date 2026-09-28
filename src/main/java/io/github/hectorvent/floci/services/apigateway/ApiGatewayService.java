@@ -3071,6 +3071,11 @@ public class ApiGatewayService {
         for (Authorizer authorizer : getAuthorizers(region, apiId)) {
             if (authorizer.getName() != null) {
                 authorizerNameToId.putIfAbsent(authorizer.getName(), authorizer.getId());
+                String methodType = methodAuthorizationType(authorizer.getType());
+                if (methodType != null) {
+                    schemeToAuthType.putIfAbsent(authorizer.getName(), methodType);
+                    schemeToAuthorizerId.putIfAbsent(authorizer.getName(), authorizer.getId());
+                }
             }
         }
         if (openAPI.getComponents() != null && openAPI.getComponents().getSecuritySchemes() != null) {
@@ -3083,7 +3088,24 @@ public class ApiGatewayService {
                     String t = importedAuthorizerType(authDef, schemeName); // token | request | cognito_user_pools
                     Map<String, Object> req = new HashMap<>();
                     req.put("name", schemeName);
-                    req.put("authorizerUri", importedAuthorizerUri(authDef, schemeName));
+                    String authorizerUri = importedAuthorizerUri(authDef, schemeName);
+                    String existingId = authorizerNameToId.get(schemeName);
+                    Authorizer existing = existingId == null ? null : getAuthorizer(region, apiId, existingId);
+                    if (existing != null && "COGNITO_USER_POOLS".equals(existing.getType())
+                            && ("token".equals(t) || "request".equals(t))
+                            && (authorizerUri == null || authorizerUri.isBlank())) {
+                        throw new AwsException("BadRequestException",
+                                "Lambda authorizer " + schemeName
+                                        + " must specify authorizerUri when replacing a Cognito authorizer.",
+                                400);
+                    }
+                    if (authorizerUri == null && existing != null
+                            && ("token".equals(t) || "request".equals(t))) {
+                        if ("TOKEN".equals(existing.getType()) || "REQUEST".equals(existing.getType())) {
+                            authorizerUri = existing.getAuthorizerUri();
+                        }
+                    }
+                    req.put("authorizerUri", authorizerUri);
                     req.put("authorizerResultTtlInSeconds", importedAuthorizerTtl(authDef, schemeName));
                     String identitySource = resolveImportedIdentitySource(scheme, authDef, t, schemeName);
                     if (identitySource != null) {
@@ -3101,16 +3123,25 @@ public class ApiGatewayService {
                         req.put("type", t == null ? "TOKEN" : t.toUpperCase());
                         schemeToAuthType.put(schemeName, "CUSTOM");
                     }
-                    String existingId = authorizerNameToId.get(schemeName);
                     Authorizer created = existingId == null
                             ? createAuthorizer(region, apiId, req)
                             : saveAuthorizer(region, apiId, existingId, req);
                     authorizerNameToId.put(schemeName, created.getId());
                     schemeToAuthorizerId.put(schemeName, created.getId());
+                    if (existing != null) {
+                        String oldMethodType = methodAuthorizationType(existing.getType());
+                        String newMethodType = schemeToAuthType.get(schemeName);
+                        if (oldMethodType != null && !oldMethodType.equals(newMethodType)) {
+                            alignRetainedAuthorizerMethods(region, apiId, existingId,
+                                    oldMethodType, newMethodType);
+                        }
+                    }
                 } else if ("awsSigv4".equalsIgnoreCase(authtype)) {
                     schemeToAuthType.put(schemeName, "AWS_IAM");
+                    schemeToAuthorizerId.remove(schemeName);
                 } else {
                     schemeToAuthType.put(schemeName, "NONE"); // plain apiKey scheme
+                    schemeToAuthorizerId.remove(schemeName);
                 }
             }
         }
@@ -3172,6 +3203,30 @@ public class ApiGatewayService {
                         throw e;
                     }
                 }
+            }
+        }
+    }
+
+    private static String methodAuthorizationType(String authorizerType) {
+        if ("TOKEN".equals(authorizerType) || "REQUEST".equals(authorizerType)) {
+            return "CUSTOM";
+        }
+        return "COGNITO_USER_POOLS".equals(authorizerType) ? "COGNITO_USER_POOLS" : null;
+    }
+
+    private void alignRetainedAuthorizerMethods(String region, String apiId, String authorizerId,
+                                                 String oldType, String newType) {
+        for (ApiGatewayResource resource : getResources(region, apiId)) {
+            boolean changed = false;
+            for (MethodConfig method : resource.getResourceMethods().values()) {
+                if (authorizerId.equals(method.getAuthorizerId())
+                        && oldType.equals(method.getAuthorizationType())) {
+                    method.setAuthorizationType(newType);
+                    changed = true;
+                }
+            }
+            if (changed) {
+                resourceStore.put(resourceKey(region, apiId, resource.getId()), resource);
             }
         }
     }

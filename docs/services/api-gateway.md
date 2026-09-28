@@ -62,6 +62,11 @@ warnings; malformed definitions and fatal import errors remain errors in either 
 request validators, and gateway responses omitted from the incoming definition. An incoming
 method replaces the complete existing method at the same path and HTTP verb, including its
 integration and responses. Use `mode=overwrite` to clear those API definitions before import.
+During merge, a method can reference a retained Lambda or Cognito authorizer even when the
+incoming security schemes omit it. A same-name Lambda authorizer keeps its existing URI when
+the incoming definition provides no new URI. If a same-name authorizer changes between Lambda
+and Cognito, retained methods that reference it use the new authorization type. An explicit
+operation-level `security: []` leaves that method without authorization.
 
 ### Supported Operations
 
