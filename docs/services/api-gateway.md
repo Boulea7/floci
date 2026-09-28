@@ -54,9 +54,14 @@ duplicate override IDs.
 
 `ImportRestApi` and `PutRestApi` return parser warnings in the REST API's `warnings` array.
 Set the lowercase query parameter `failonwarnings=true` (SDK: `failOnWarnings`) to reject
-a warning-bearing definition with `BadRequestException` before creating or overwriting
+a warning-bearing definition with `BadRequestException` before creating or changing
 the API. The default is `false`. A successful import with no warnings clears any prior
 warnings; malformed definitions and fatal import errors remain errors in either mode.
+
+`PutRestApi` defaults to `mode=merge`. Merge keeps paths, methods, models, authorizers,
+request validators, and gateway responses omitted from the incoming definition. An incoming
+method replaces the complete existing method at the same path and HTTP verb, including its
+integration and responses. Use `mode=overwrite` to clear those API definitions before import.
 
 ### Supported Operations
 
