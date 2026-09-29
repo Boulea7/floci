@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.ses;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.ses.model.CloudWatchDestination;
 import io.github.hectorvent.floci.services.ses.model.CloudWatchDimensionConfiguration;
+import io.github.hectorvent.floci.services.ses.model.EventBridgeDestination;
 import io.github.hectorvent.floci.services.ses.model.EventDestination;
 import io.github.hectorvent.floci.services.ses.model.KinesisFirehoseDestination;
 import io.github.hectorvent.floci.services.ses.model.PinpointDestination;
@@ -252,6 +253,67 @@ class SesConfigurationSetEventDestinationTest {
         cw.setDimensionConfigurations(List.of(dim));
         ed.setCloudWatchDestination(cw);
         assertThrows(AwsException.class, () -> SesConfigurationSetService.validateEventDestination(ed));
+    }
+
+    @Test
+    void eventBridgeDefaultBusCommercialPartition_passes() {
+        assertDoesNotThrow(() -> SesConfigurationSetService.validateEventDestination(
+                withEventBridge("arn:aws:events:us-east-1:000000000000:event-bus/default")));
+    }
+
+    @Test
+    void eventBridgeDefaultBusNonCommercialPartition_passes() {
+        assertDoesNotThrow(() -> SesConfigurationSetService.validateEventDestination(
+                withEventBridge("arn:aws-cn:events:cn-north-1:000000000000:event-bus/default")));
+    }
+
+    @Test
+    void eventBridgeNullBusArn_throws() {
+        AwsException ex = assertThrows(AwsException.class,
+                () -> SesConfigurationSetService.validateEventDestination(withEventBridge(null)));
+        assertEquals("InvalidParameterValue", ex.getErrorCode());
+    }
+
+    @Test
+    void eventBridgeBlankBusArn_throws() {
+        AwsException ex = assertThrows(AwsException.class,
+                () -> SesConfigurationSetService.validateEventDestination(withEventBridge("  ")));
+        assertEquals("InvalidParameterValue", ex.getErrorCode());
+    }
+
+    @Test
+    void eventBridgeCustomBus_throws() {
+        AwsException ex = assertThrows(AwsException.class,
+                () -> SesConfigurationSetService.validateEventDestination(
+                        withEventBridge(
+                                "arn:aws:events:us-east-1:000000000000:event-bus/custom-bus")));
+        assertEquals("InvalidParameterValue", ex.getErrorCode());
+    }
+
+    @Test
+    void eventBridgeWrongServiceWithDefaultSuffix_throws() {
+        AwsException ex = assertThrows(AwsException.class,
+                () -> SesConfigurationSetService.validateEventDestination(
+                        withEventBridge(
+                                "arn:aws:sns:us-east-1:000000000000:event-bus/default")));
+        assertEquals("InvalidParameterValue", ex.getErrorCode());
+    }
+
+    @Test
+    void eventBridgeMalformedArn_throws() {
+        AwsException ex = assertThrows(AwsException.class,
+                () -> SesConfigurationSetService.validateEventDestination(
+                        withEventBridge("not-an-arn")));
+        assertEquals("InvalidParameterValue", ex.getErrorCode());
+    }
+
+    private static EventDestination withEventBridge(String busArn) {
+        EventDestination ed = new EventDestination();
+        ed.setMatchingEventTypes(List.of("SEND"));
+        EventBridgeDestination eventBridge = new EventBridgeDestination();
+        eventBridge.setEventBusArn(busArn);
+        ed.setEventBridgeDestination(eventBridge);
+        return ed;
     }
 
     private static CloudWatchDestination cloudWatch() {

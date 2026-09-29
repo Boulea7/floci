@@ -11,10 +11,12 @@ import org.junit.jupiter.api.TestMethodOrder;
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.services.ses.SesClient;
 import software.amazon.awssdk.services.sesv2.SesV2Client;
+import software.amazon.awssdk.services.sesv2.model.BadRequestException;
 import software.amazon.awssdk.services.sesv2.model.CreateConfigurationSetEventDestinationRequest;
 import software.amazon.awssdk.services.sesv2.model.CreateConfigurationSetRequest;
 import software.amazon.awssdk.services.sesv2.model.DeleteConfigurationSetEventDestinationRequest;
 import software.amazon.awssdk.services.sesv2.model.DeleteConfigurationSetRequest;
+import software.amazon.awssdk.services.sesv2.model.EventBridgeDestination;
 import software.amazon.awssdk.services.sesv2.model.EventDestinationDefinition;
 import software.amazon.awssdk.services.sesv2.model.EventType;
 import software.amazon.awssdk.services.sesv2.model.GetConfigurationSetEventDestinationsRequest;
@@ -43,6 +45,8 @@ class SesConfigurationSetEventDestinationTest {
     private static final String ED_NAME = "ed-sns";
     private static final String TOPIC_ARN = "arn:aws:sns:us-east-1:000000000000:ses-events";
     private static final String TOPIC_ARN_2 = "arn:aws:sns:us-east-1:000000000000:ses-events-2";
+    private static final String DEFAULT_BUS_ARN = "arn:aws:events:us-east-1:000000000000:event-bus/default";
+    private static final String CUSTOM_BUS_ARN = "arn:aws:events:us-east-1:000000000000:event-bus/custom";
 
     @BeforeAll
     static void setup() {
@@ -222,6 +226,62 @@ class SesConfigurationSetEventDestinationTest {
                 .isInstanceOf(AwsServiceException.class)
                 .extracting(e -> ((AwsServiceException) e).statusCode())
                 .isEqualTo(404);
+    }
+
+    @Test
+    @Order(9)
+    void v2_eventBridgeDefaultBusAcceptedAndCustomBusRejected() {
+        String destinationName = "ed-eventbridge";
+        sesV2.createConfigurationSetEventDestination(CreateConfigurationSetEventDestinationRequest.builder()
+                .configurationSetName(v2CsName)
+                .eventDestinationName(destinationName)
+                .eventDestination(EventDestinationDefinition.builder()
+                        .matchingEventTypes(EventType.SEND)
+                        .eventBridgeDestination(EventBridgeDestination.builder().eventBusArn(DEFAULT_BUS_ARN).build())
+                        .build())
+                .build());
+
+        try {
+            assertThatThrownBy(() -> sesV2.createConfigurationSetEventDestination(
+                    CreateConfigurationSetEventDestinationRequest.builder()
+                            .configurationSetName(v2CsName)
+                            .eventDestinationName("ed-custom")
+                            .eventDestination(EventDestinationDefinition.builder()
+                                    .matchingEventTypes(EventType.SEND)
+                                    .eventBridgeDestination(EventBridgeDestination.builder().eventBusArn(CUSTOM_BUS_ARN).build())
+                                    .build())
+                            .build()))
+                    .isInstanceOf(BadRequestException.class)
+                    .extracting(e -> ((AwsServiceException) e).statusCode())
+                    .isEqualTo(400);
+
+            assertThatThrownBy(() -> sesV2.updateConfigurationSetEventDestination(
+                    UpdateConfigurationSetEventDestinationRequest.builder()
+                            .configurationSetName(v2CsName)
+                            .eventDestinationName(destinationName)
+                            .eventDestination(EventDestinationDefinition.builder()
+                                    .matchingEventTypes(EventType.SEND)
+                                    .eventBridgeDestination(EventBridgeDestination.builder().eventBusArn(CUSTOM_BUS_ARN).build())
+                                    .build())
+                            .build()))
+                    .isInstanceOf(BadRequestException.class)
+                    .extracting(e -> ((AwsServiceException) e).statusCode())
+                    .isEqualTo(400);
+
+            GetConfigurationSetEventDestinationsResponse response =
+                    sesV2.getConfigurationSetEventDestinations(GetConfigurationSetEventDestinationsRequest.builder()
+                            .configurationSetName(v2CsName)
+                            .build());
+            assertThat(response.eventDestinations()).hasSize(1);
+            assertThat(response.eventDestinations().get(0).name()).isEqualTo(destinationName);
+            assertThat(response.eventDestinations().get(0).eventBridgeDestination().eventBusArn())
+                    .isEqualTo(DEFAULT_BUS_ARN);
+        } finally {
+            sesV2.deleteConfigurationSetEventDestination(DeleteConfigurationSetEventDestinationRequest.builder()
+                    .configurationSetName(v2CsName)
+                    .eventDestinationName(destinationName)
+                    .build());
+        }
     }
 
     // ─────────────────────────── V1 (Query/XML) ───────────────────────────

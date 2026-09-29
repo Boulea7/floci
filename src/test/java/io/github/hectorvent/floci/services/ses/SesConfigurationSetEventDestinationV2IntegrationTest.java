@@ -5,11 +5,14 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.nullValue;
 
 /**
  * Integration tests for SES V2 ConfigurationSetEventDestination endpoints under
@@ -369,5 +372,283 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
             .body("EventDestinations[0].Enabled", equalTo(false))
             .body("EventDestinations[0].SnsDestination.TopicArn",
                     equalTo("arn:aws:sns:us-east-1:000000000000:ed-a-updated"));
+    }
+
+    @Test
+    @Order(16)
+    void createEventBridgeConfigurationSet() {
+        String cs = "v2-cs-ed-ebus";
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("{\"ConfigurationSetName\": \"" + cs + "\"}")
+        .when()
+            .post("/v2/email/configuration-sets")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(17)
+    void createEventDestination_eventBridgeCustomBusRejected() {
+        String cs = "v2-cs-ed-ebus";
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestinationName": "ed-eb-custom",
+                  "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND"],
+                    "EventBridgeDestination": {
+                      "EventBusArn": "arn:aws:events:us-east-1:000000000000:event-bus/custom-bus"
+                    }
+                  }
+                }
+                """)
+        .when()
+            .post("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("BadRequestException"));
+
+        // The rejected destination must not have been stored.
+        given()
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .get("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200)
+            .body("EventDestinations", hasSize(0));
+    }
+
+    @Test
+    @Order(18)
+    void updateEventDestination_eventBridgeCustomBusRejectedAndDefaultPreserved() {
+        String cs = "v2-cs-ed-ebus";
+        String defaultBusArn = "arn:aws:events:us-east-1:000000000000:event-bus/default";
+
+        // Seed a destination on the default event bus.
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestinationName": "ed-eb-default",
+                  "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND"],
+                    "EventBridgeDestination": {"EventBusArn": "%s"}
+                  }
+                }
+                """.formatted(defaultBusArn))
+        .when()
+            .post("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200);
+
+        // An otherwise identical ARN naming a custom event bus must be rejected.
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND"],
+                    "EventBridgeDestination": {
+                      "EventBusArn": "arn:aws:events:us-east-1:000000000000:event-bus/custom-bus"
+                    }
+                  }
+                }
+                """)
+        .when()
+            .put("/v2/email/configuration-sets/" + cs + "/event-destinations/ed-eb-default")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("BadRequestException"));
+
+        // The stored destination must still point at the default event bus.
+        given()
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .get("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200)
+            .body("EventDestinations", hasSize(1))
+            .body("EventDestinations[0].Name", equalTo("ed-eb-default"))
+            .body("EventDestinations[0].EventBridgeDestination.EventBusArn",
+                    equalTo(defaultBusArn));
+    }
+
+    @Test
+    @Order(19)
+    void createEventDestination_eventBridgeDefaultBusNonCommercialPartitionSucceeds() {
+        String cs = "v2-cs-ed-ebus";
+        String cnDefaultBusArn =
+                "arn:aws-cn:events:cn-north-1:000000000000:event-bus/default";
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestinationName": "ed-eb-default-cn",
+                  "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND"],
+                    "EventBridgeDestination": {"EventBusArn": "%s"}
+                  }
+                }
+                """.formatted(cnDefaultBusArn))
+        .when()
+            .post("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .get("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200)
+            .body("EventDestinations.find { it.Name == 'ed-eb-default-cn' }"
+                    + ".EventBridgeDestination.EventBusArn",
+                    equalTo(cnDefaultBusArn));
+    }
+
+    @Test
+    @Order(20)
+    void createEventDestination_eventBridgeBlankBusArnRejected() {
+        String cs = "v2-cs-ed-ebus";
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestinationName": "ed-eb-blank",
+                  "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND"],
+                    "EventBridgeDestination": {"EventBusArn": ""}
+                  }
+                }
+                """)
+        .when()
+            .post("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("BadRequestException"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+            "empty-fields,arn::events:::event-bus/default",
+            "missing-partition,arn::events:us-east-1:000000000000:event-bus/default",
+            "missing-region,arn:aws:events::000000000000:event-bus/default",
+            "missing-account,arn:aws:events:us-east-1::event-bus/default",
+            "invalid-partition,arn:example:events:us-east-1:000000000000:event-bus/default",
+            "short-account,arn:aws:events:us-east-1:123:event-bus/default"
+    })
+    @Order(21)
+    void createEventDestination_eventBridgeIncompleteArnRejected(String caseName, String busArn) {
+        String cs = "v2-cs-ed-ebus";
+        String destinationName = "ed-eb-incomplete-create-" + caseName;
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestinationName": "%s",
+                  "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND"],
+                    "EventBridgeDestination": {"EventBusArn": "%s"}
+                  }
+                }
+                """.formatted(destinationName, busArn))
+        .when()
+            .post("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("BadRequestException"));
+
+        given()
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .get("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200)
+            .body("EventDestinations.find { it.Name == '" + destinationName + "' }", nullValue());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+            "empty-fields,arn::events:::event-bus/default",
+            "missing-partition,arn::events:us-east-1:000000000000:event-bus/default",
+            "missing-region,arn:aws:events::000000000000:event-bus/default",
+            "missing-account,arn:aws:events:us-east-1::event-bus/default",
+            "invalid-partition,arn:example:events:us-east-1:000000000000:event-bus/default",
+            "short-account,arn:aws:events:us-east-1:123:event-bus/default"
+    })
+    @Order(22)
+    void updateEventDestination_eventBridgeIncompleteArnRejectedAndDefaultPreserved(
+            String caseName, String busArn) {
+        String cs = "v2-cs-ed-ebus";
+        String destinationName = "ed-eb-incomplete-update-" + caseName;
+        String defaultBusArn = "arn:aws:events:us-east-1:000000000000:event-bus/default";
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestinationName": "%s",
+                  "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND"],
+                    "EventBridgeDestination": {"EventBusArn": "%s"}
+                  }
+                }
+                """.formatted(destinationName, defaultBusArn))
+        .when()
+            .post("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200);
+
+        try {
+            given()
+                .contentType("application/json")
+                .header("Authorization", AUTH_HEADER)
+                .body("""
+                    {
+                      "EventDestination": {
+                        "Enabled": true,
+                        "MatchingEventTypes": ["SEND"],
+                        "EventBridgeDestination": {"EventBusArn": "%s"}
+                      }
+                    }
+                    """.formatted(busArn))
+            .when()
+                .put("/v2/email/configuration-sets/" + cs + "/event-destinations/" + destinationName)
+            .then()
+                .statusCode(400)
+                .body("__type", equalTo("BadRequestException"));
+
+            given()
+                .header("Authorization", AUTH_HEADER)
+            .when()
+                .get("/v2/email/configuration-sets/" + cs + "/event-destinations")
+            .then()
+                .statusCode(200)
+                .body("EventDestinations.find { it.Name == '" + destinationName + "' }"
+                        + ".EventBridgeDestination.EventBusArn", equalTo(defaultBusArn));
+        } finally {
+            given()
+                .header("Authorization", AUTH_HEADER)
+            .when()
+                .delete("/v2/email/configuration-sets/" + cs + "/event-destinations/" + destinationName)
+            .then()
+                .statusCode(200);
+        }
     }
 }
