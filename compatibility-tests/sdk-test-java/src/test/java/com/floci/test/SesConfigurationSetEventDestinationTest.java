@@ -7,6 +7,8 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.services.ses.SesClient;
@@ -228,14 +230,20 @@ class SesConfigurationSetEventDestinationTest {
                 .isEqualTo(404);
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+            "custom," + CUSTOM_BUS_ARN,
+            "mismatched-account,arn:aws:events:us-east-1:111111111111:event-bus/default",
+            "mismatched-region,arn:aws:events:us-west-2:000000000000:event-bus/default"
+    })
     @Order(9)
-    void v2_eventBridgeDefaultBusAcceptedAndCustomBusRejected() {
-        String destinationName = "ed-eventbridge";
+    void v2_eventBridgeDefaultBusAcceptedAndInvalidBusRejected(String caseName, String rejectedBusArn) {
+        String destinationName = "ed-eventbridge-" + caseName;
         sesV2.createConfigurationSetEventDestination(CreateConfigurationSetEventDestinationRequest.builder()
                 .configurationSetName(v2CsName)
                 .eventDestinationName(destinationName)
                 .eventDestination(EventDestinationDefinition.builder()
+                        .enabled(true)
                         .matchingEventTypes(EventType.SEND)
                         .eventBridgeDestination(EventBridgeDestination.builder().eventBusArn(DEFAULT_BUS_ARN).build())
                         .build())
@@ -245,10 +253,10 @@ class SesConfigurationSetEventDestinationTest {
             assertThatThrownBy(() -> sesV2.createConfigurationSetEventDestination(
                     CreateConfigurationSetEventDestinationRequest.builder()
                             .configurationSetName(v2CsName)
-                            .eventDestinationName("ed-custom")
+                            .eventDestinationName("ed-invalid-" + caseName)
                             .eventDestination(EventDestinationDefinition.builder()
                                     .matchingEventTypes(EventType.SEND)
-                                    .eventBridgeDestination(EventBridgeDestination.builder().eventBusArn(CUSTOM_BUS_ARN).build())
+                                    .eventBridgeDestination(EventBridgeDestination.builder().eventBusArn(rejectedBusArn).build())
                                     .build())
                             .build()))
                     .isInstanceOf(BadRequestException.class)
@@ -260,8 +268,9 @@ class SesConfigurationSetEventDestinationTest {
                             .configurationSetName(v2CsName)
                             .eventDestinationName(destinationName)
                             .eventDestination(EventDestinationDefinition.builder()
-                                    .matchingEventTypes(EventType.SEND)
-                                    .eventBridgeDestination(EventBridgeDestination.builder().eventBusArn(CUSTOM_BUS_ARN).build())
+                                    .enabled(false)
+                                    .matchingEventTypes(EventType.BOUNCE)
+                                    .eventBridgeDestination(EventBridgeDestination.builder().eventBusArn(rejectedBusArn).build())
                                     .build())
                             .build()))
                     .isInstanceOf(BadRequestException.class)
@@ -274,6 +283,8 @@ class SesConfigurationSetEventDestinationTest {
                             .build());
             assertThat(response.eventDestinations()).hasSize(1);
             assertThat(response.eventDestinations().get(0).name()).isEqualTo(destinationName);
+            assertThat(response.eventDestinations().get(0).enabled()).isTrue();
+            assertThat(response.eventDestinations().get(0).matchingEventTypes()).containsExactly(EventType.SEND);
             assertThat(response.eventDestinations().get(0).eventBridgeDestination().eventBusArn())
                     .isEqualTo(DEFAULT_BUS_ARN);
         } finally {

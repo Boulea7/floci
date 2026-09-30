@@ -8,6 +8,8 @@ import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import java.util.List;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
@@ -26,6 +28,11 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
             "AWS4-HMAC-SHA256 Credential=AKID/20260101/us-east-1/ses/aws4_request";
 
     private static final String CS = "v2-cs-ed";
+
+    private static final String SCOPED_AUTH_HEADER =
+            "AWS4-HMAC-SHA256 Credential=111111111111/20260101/us-west-2/ses/aws4_request";
+    private static final String SCOPED_DEFAULT_BUS_ARN =
+            "arn:aws:events:us-west-2:111111111111:event-bus/default";
 
     @Test
     @Order(1)
@@ -486,11 +493,22 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
     @Order(19)
     void createEventDestination_eventBridgeDefaultBusNonCommercialPartitionSucceeds() {
         String cs = "v2-cs-ed-ebus";
+        String cnAuthHeader =
+                "AWS4-HMAC-SHA256 Credential=AKID/20260101/cn-north-1/ses/aws4_request";
         String cnDefaultBusArn =
                 "arn:aws-cn:events:cn-north-1:000000000000:event-bus/default";
         given()
             .contentType("application/json")
-            .header("Authorization", AUTH_HEADER)
+            .header("Authorization", cnAuthHeader)
+            .body("{\"ConfigurationSetName\": \"" + cs + "\"}")
+        .when()
+            .post("/v2/email/configuration-sets")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/json")
+            .header("Authorization", cnAuthHeader)
             .body("""
                 {
                   "EventDestinationName": "ed-eb-default-cn",
@@ -507,7 +525,7 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
             .statusCode(200);
 
         given()
-            .header("Authorization", AUTH_HEADER)
+            .header("Authorization", cnAuthHeader)
         .when()
             .get("/v2/email/configuration-sets/" + cs + "/event-destinations")
         .then()
@@ -548,12 +566,14 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
             "missing-region,arn:aws:events::000000000000:event-bus/default",
             "missing-account,arn:aws:events:us-east-1::event-bus/default",
             "invalid-partition,arn:example:events:us-east-1:000000000000:event-bus/default",
-            "short-account,arn:aws:events:us-east-1:123:event-bus/default"
+            "short-account,arn:aws:events:us-east-1:123:event-bus/default",
+            "mismatched-account,arn:aws:events:us-east-1:111111111111:event-bus/default",
+            "mismatched-region,arn:aws:events:us-west-2:000000000000:event-bus/default"
     })
     @Order(21)
-    void createEventDestination_eventBridgeIncompleteArnRejected(String caseName, String busArn) {
+    void createEventDestination_eventBridgeInvalidArnRejected(String caseName, String busArn) {
         String cs = "v2-cs-ed-ebus";
-        String destinationName = "ed-eb-incomplete-create-" + caseName;
+        String destinationName = "ed-eb-invalid-create-" + caseName;
         given()
             .contentType("application/json")
             .header("Authorization", AUTH_HEADER)
@@ -589,13 +609,15 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
             "missing-region,arn:aws:events::000000000000:event-bus/default",
             "missing-account,arn:aws:events:us-east-1::event-bus/default",
             "invalid-partition,arn:example:events:us-east-1:000000000000:event-bus/default",
-            "short-account,arn:aws:events:us-east-1:123:event-bus/default"
+            "short-account,arn:aws:events:us-east-1:123:event-bus/default",
+            "mismatched-account,arn:aws:events:us-east-1:111111111111:event-bus/default",
+            "mismatched-region,arn:aws:events:us-west-2:000000000000:event-bus/default"
     })
     @Order(22)
-    void updateEventDestination_eventBridgeIncompleteArnRejectedAndDefaultPreserved(
+    void updateEventDestination_eventBridgeInvalidArnRejectedAndDefaultPreserved(
             String caseName, String busArn) {
         String cs = "v2-cs-ed-ebus";
-        String destinationName = "ed-eb-incomplete-update-" + caseName;
+        String destinationName = "ed-eb-invalid-update-" + caseName;
         String defaultBusArn = "arn:aws:events:us-east-1:000000000000:event-bus/default";
         given()
             .contentType("application/json")
@@ -622,8 +644,8 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
                 .body("""
                     {
                       "EventDestination": {
-                        "Enabled": true,
-                        "MatchingEventTypes": ["SEND"],
+                        "Enabled": false,
+                        "MatchingEventTypes": ["BOUNCE"],
                         "EventBridgeDestination": {"EventBusArn": "%s"}
                       }
                     }
@@ -641,6 +663,10 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
             .then()
                 .statusCode(200)
                 .body("EventDestinations.find { it.Name == '" + destinationName + "' }"
+                        + ".Enabled", equalTo(true))
+                .body("EventDestinations.find { it.Name == '" + destinationName + "' }"
+                        + ".MatchingEventTypes", equalTo(List.of("SEND")))
+                .body("EventDestinations.find { it.Name == '" + destinationName + "' }"
                         + ".EventBridgeDestination.EventBusArn", equalTo(defaultBusArn));
         } finally {
             given()
@@ -650,5 +676,66 @@ class SesConfigurationSetEventDestinationV2IntegrationTest {
             .then()
                 .statusCode(200);
         }
+    }
+
+    @Test
+    @Order(23)
+    void eventBridgeDefaultBusMatchingNonDefaultRequestScopeSucceeds() {
+        String cs = "v2-cs-ed-request-scope";
+        given()
+            .contentType("application/json")
+            .header("Authorization", SCOPED_AUTH_HEADER)
+            .body("{\"ConfigurationSetName\": \"" + cs + "\"}")
+        .when()
+            .post("/v2/email/configuration-sets")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/json")
+            .header("Authorization", SCOPED_AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestinationName": "ed-eb-scoped-default",
+                  "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND"],
+                    "EventBridgeDestination": {"EventBusArn": "%s"}
+                  }
+                }
+                """.formatted(SCOPED_DEFAULT_BUS_ARN))
+        .when()
+            .post("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/json")
+            .header("Authorization", SCOPED_AUTH_HEADER)
+            .body("""
+                {
+                  "EventDestination": {
+                    "Enabled": false,
+                    "MatchingEventTypes": ["BOUNCE"],
+                    "EventBridgeDestination": {"EventBusArn": "%s"}
+                  }
+                }
+                """.formatted(SCOPED_DEFAULT_BUS_ARN))
+        .when()
+            .put("/v2/email/configuration-sets/" + cs + "/event-destinations/ed-eb-scoped-default")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("Authorization", SCOPED_AUTH_HEADER)
+        .when()
+            .get("/v2/email/configuration-sets/" + cs + "/event-destinations")
+        .then()
+            .statusCode(200)
+            .body("EventDestinations", hasSize(1))
+            .body("EventDestinations[0].Enabled", equalTo(false))
+            .body("EventDestinations[0].MatchingEventTypes", equalTo(List.of("BOUNCE")))
+            .body("EventDestinations[0].EventBridgeDestination.EventBusArn",
+                    equalTo(SCOPED_DEFAULT_BUS_ARN));
     }
 }
