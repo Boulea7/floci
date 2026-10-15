@@ -2346,6 +2346,13 @@ public class S3Service implements Resettable, ResourceProvider {
                 Map.of("ProposedSize", proposedSize, "MinSizeAllowed", minSizeAllowed));
     }
 
+    /** The same error for an undersized multipart part, identifying its number and ETag. */
+    static AwsException entityTooSmall(long proposedSize, long minSizeAllowed, int partNumber, String eTag) {
+        return new AwsException("EntityTooSmall", ENTITY_TOO_SMALL_MESSAGE, 400,
+                Map.of("ProposedSize", proposedSize, "MinSizeAllowed", minSizeAllowed,
+                        "PartNumber", partNumber, "ETag", eTag));
+    }
+
     static void requireCopyableSize(S3Object source) {
         if (source.getSize() > MAX_COPY_OBJECT_SOURCE_SIZE) {
             throw new AwsException("InvalidRequest",
@@ -4271,10 +4278,8 @@ public class S3Service implements Resettable, ResourceProvider {
                 for (int index = 0; index < parts.size() - 1; index++) {
                     Part part = parts.get(index);
                     if (part.getSize() < MIN_PART_SIZE) {
-                        throw new AwsException("EntityTooSmall", ENTITY_TOO_SMALL_MESSAGE, 400,
-                                Map.of("ProposedSize", part.getSize(), "MinSizeAllowed", MIN_PART_SIZE,
-                                        "PartNumber", part.getPartNumber(),
-                                        "ETag", stripSurroundingQuotes(part.getETag())));
+                        throw entityTooSmall(part.getSize(), MIN_PART_SIZE, part.getPartNumber(),
+                                stripSurroundingQuotes(part.getETag()));
                     }
                 }
 
