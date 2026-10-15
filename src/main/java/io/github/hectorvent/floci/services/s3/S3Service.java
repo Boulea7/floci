@@ -2310,6 +2310,7 @@ public class S3Service implements Resettable, ResourceProvider {
 
     // The most one part of a multipart upload can hold, per S3's multipart upload limits.
     static final long MAX_PART_SIZE = 5L * 1024 * 1024 * 1024;
+    static final long MIN_PART_SIZE = 5L * 1024 * 1024;
 
     // The User Guide's "up to 5 GB" in one PutObject, read as 5 GiB like CopyObject's 5 GB limit;
     // a larger object is uploaded in parts.
@@ -4265,6 +4266,16 @@ public class S3Service implements Resettable, ResourceProvider {
                         : S3Checksum.fullObject(algorithm, completedParts);
                 if (expectedChecksum != null && expectedChecksum.hasAnyValue()) {
                     validateExpectedChecksum(checksum, expectedChecksum);
+                }
+
+                for (int index = 0; index < parts.size() - 1; index++) {
+                    Part part = parts.get(index);
+                    if (part.getSize() < MIN_PART_SIZE) {
+                        throw new AwsException("EntityTooSmall", ENTITY_TOO_SMALL_MESSAGE, 400,
+                                Map.of("ProposedSize", part.getSize(), "MinSizeAllowed", MIN_PART_SIZE,
+                                        "PartNumber", part.getPartNumber(),
+                                        "ETag", stripSurroundingQuotes(part.getETag())));
+                    }
                 }
 
                 ObjectBody body = inMemory
